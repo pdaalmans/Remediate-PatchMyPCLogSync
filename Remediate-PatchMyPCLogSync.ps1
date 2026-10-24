@@ -6,9 +6,10 @@
  
 .DESCRIPTION
     - Copies new/changed logs (opens source with shared read, so locked logs still copy)
-    - Large logs are truncated to the last $MaxFileSizeMB (tail), newest entries kept
+    - Large logs are truncated to the last $MaxFileSizeMB (tail), newest entries kept,
+      starting at a full line and with a marker line at the top (marker included in the cap)
     - Removes mirrored copies older than $RetentionDays
-    - Enforces a total size cap on the mirror folder (oldest removed first)
+    - Enforces a total size cap on the mirror folder (copies no longer selected go first, then oldest)
  
 .NOTES
     Run as:            SYSTEM
@@ -27,8 +28,9 @@ $Sources = @(
     [pscustomobject]@{ Name = 'PatchMyPCClient';     Path = (Join-Path $env:ProgramData 'PatchMyPC\Logs');      Include = @('*.log','*.lo_'); Recurse = $true  }
     [pscustomobject]@{ Name = 'PatchMyPCRoot';       Path = (Join-Path $env:ProgramData 'PatchMyPC');           Include = @('*.log');         Recurse = $false }
     [pscustomobject]@{ Name = 'CCMLogs';             Path = (Join-Path $env:WinDir 'CCM\Logs');                 Include = @('PatchMyPC*.log'); Recurse = $false }
-    # Add your custom "Manage Installation Logging" folder here if you changed it, e.g.:
-    # [pscustomobject]@{ Name = 'InstallLogs'; Path = 'C:\Windows\Logs\PatchMyPCInstallLogs'; Include = @('*.log'); Recurse = $true }
+    [pscustomobject]@{ Name = 'PatchMyPCInstallLogs'; Path = (Join-Path $env:ProgramData 'PatchMyPCInstallLogs'); Include = @('*.log');        Recurse = $true  }
+    # If you changed the "Manage Installation Logging" folder, update the PatchMyPCInstallLogs path above, or add it, e.g.:
+    # [pscustomobject]@{ Name = 'InstallLogs'; Path = 'D:\Logs\PatchMyPCInstallLogs'; Include = @('*.log'); Recurse = $true }
 )
  
 # Remediation-only settings
@@ -84,14 +86,54 @@ function Copy-LogFile {
     $in = [IO.File]::Open($Source.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read,
                           [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
     try {
+        # Copy the file as it was when selected, so the content matches the timestamp set below
+        # and a log that grows during the copy cannot push the mirror over the size caps
+        $end    = [math]::Min($in.Length, $Source.Length)
+        $start  = [long]0
+        $header = [byte[]]@()
+ 
+        if ($end -gt $MaxBytes) {
+            # Detect the encoding from the BOM, so the marker matches the rest of the log (MSI logs are UTF-16)
+            $bom = New-Object byte[] 3
+            $n   = $in.Read($bom, 0, 3)
+            $enc = [Text.Encoding]::UTF8
+            if ($n -ge 2 -and $bom[0] -eq 0xFF -and $bom[1] -eq 0xFE) { $enc = [Text.Encoding]::Unicode }
+            $preamble = [byte[]]@()
+            if ($enc -eq [Text.Encoding]::Unicode -or ($n -eq 3 -and $bom[0] -eq 0xEF -and $bom[1] -eq 0xBB -and $bom[2] -eq 0xBF)) {
+                $preamble = $enc.GetPreamble()
+            }
+            $marker = $enc.GetBytes("<<< Truncated by PatchMyPC log sync: last $([math]::Round($MaxBytes/1MB)) MB of $($Source.FullName) >>>`r`n")
+            $header = [byte[]]($preamble + $marker)
+ 
+            # Keep the tail; the marker counts towards the per-file cap
+            $newline = $enc.GetBytes("`n")
+            $start   = $end - ($MaxBytes - $header.Length)
+            if ($start % $newline.Length) { $start++ }
+ 
+            # Start at the next full line, so the copy does not begin with a partial log entry
+            [void]$in.Seek($start, [IO.SeekOrigin]::Begin)
+            $buf  = New-Object byte[] ([int][math]::Min(65536, $end - $start))
+            $read = $in.Read($buf, 0, $buf.Length)
+            for ($i = 0; $i -le $read - $newline.Length; $i += $newline.Length) {
+                if ($buf[$i] -eq $newline[0] -and ($newline.Length -eq 1 -or $buf[$i + 1] -eq $newline[1])) {
+                    $start += $i + $newline.Length
+                    break
+                }
+            }
+        }
+ 
         $out = [IO.File]::Open($Target, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::Read)
         try {
-            if ($in.Length -gt $MaxBytes) {
-                [void]$in.Seek(-$MaxBytes, [IO.SeekOrigin]::End)
-                $marker = [Text.Encoding]::UTF8.GetBytes("<<< Truncated by PatchMyPC log sync: last $([math]::Round($MaxBytes/1MB)) MB of $($Source.FullName) >>>`r`n")
-                $out.Write($marker, 0, $marker.Length)
+            $out.Write($header, 0, $header.Length)
+            [void]$in.Seek($start, [IO.SeekOrigin]::Begin)
+            $buffer    = New-Object byte[] 81920
+            $remaining = $end - $start
+            while ($remaining -gt 0) {
+                $read = $in.Read($buffer, 0, [int][math]::Min($buffer.Length, $remaining))
+                if ($read -le 0) { break }
+                $out.Write($buffer, 0, $read)
+                $remaining -= $read
             }
-            $in.CopyTo($out)
         }
         finally { $out.Dispose() }
     }
@@ -109,7 +151,8 @@ try {
     }
  
     # 1. Mirror new/changed logs
-    foreach ($item in @(Get-SelectedFiles)) {
+    $selected = @(Get-SelectedFiles)
+    foreach ($item in $selected) {
         $needsCopy = -not (Test-Path -LiteralPath $item.Target) -or
                      ([IO.File]::GetLastWriteTimeUtc($item.Target) -ne $item.Source.LastWriteTimeUtc)
         if (-not $needsCopy) { continue }
@@ -126,8 +169,12 @@ try {
         Where-Object { $_.LastWriteTime -lt $cutoff } |
         ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue; $removed++ }
  
-    # 3. Total size cap: remove oldest first
-    $all   = @(Get-ChildItem -LiteralPath $DestRoot -File -Recurse -ErrorAction SilentlyContinue | Sort-Object LastWriteTime)
+    # 3. Total size cap: remove oldest first, starting with copies that are no longer selected,
+    #    so the files detection checks are never removed (that would loop remediation forever)
+    $keep  = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($item in $selected) { [void]$keep.Add($item.Target) }
+    $all   = @(Get-ChildItem -LiteralPath $DestRoot -File -Recurse -ErrorAction SilentlyContinue |
+               Sort-Object @{ Expression = { $keep.Contains($_.FullName) } }, LastWriteTime)
     $total = ($all | Measure-Object -Property Length -Sum).Sum
     $cap   = $MaxTotalSizeMB * 1MB
     foreach ($f in $all) {

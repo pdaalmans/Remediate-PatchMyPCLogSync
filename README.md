@@ -30,10 +30,23 @@ The idea for this script came from **Merlijn Van Waeyenberghe**, who suggested p
 - Copies new or changed logs to `C:\ProgramData\Microsoft\IntuneManagementExtension\Logs\PatchMyPC`, keeping the source folder structure under a subfolder per source.
 - Opens source files with shared read access, so logs that are currently being written to can still be copied.
 - Only mirrors logs written in the last `$MaxAgeDays` days.
-- Truncates large logs to the last `$MaxFileSizeMB` MB (the newest entries are kept) and adds a marker line at the top of the truncated copy.
+- Truncates large logs to the last `$MaxFileSizeMB` MB (the newest entries are kept). See [Truncation](#truncation).
 - Selects files newest-first so the mirror stays within `$MaxTotalSizeMB`, which keeps the diagnostics zip lean.
-- Removes mirrored copies older than `$RetentionDays` days, enforces the total size cap (oldest removed first) and cleans up empty subfolders.
+- Removes mirrored copies older than `$RetentionDays` days, enforces the total size cap and cleans up empty subfolders. When the cap is exceeded, copies that are no longer selected (for example rotated or deleted source logs) are removed first, oldest first. Selected copies are only removed as a last resort, so the remediation does not remove files that the detection then reports as missing.
 - Sets the last write time of each copy to that of the source, so a detection script can reliably compare the two.
+
+## Truncation
+
+Logs larger than `$MaxFileSizeMB` are not copied in full. The remediation keeps only the end of the log, because the newest entries are usually the ones you need for troubleshooting:
+
+- The copy starts with a marker line, so it is clear the file was truncated:
+  `<<< Truncated by PatchMyPC log sync: last 10 MB of C:\ProgramData\PatchMyPC\Logs\PatchMyPC.log >>>`
+- The marker counts towards `$MaxFileSizeMB`, so a truncated copy is never larger than the cap.
+- The kept part starts at the first full line, so the copy does not begin with half a log entry.
+- The encoding of the source is kept: for UTF-16 logs (such as MSI installation logs) and UTF-8 logs with a BOM, the BOM and marker are written in the same encoding.
+- The copy contains the log as it was when it was selected, even if it is still being written to. This keeps the content in line with the timestamp of the copy, and a growing log cannot push the mirror over the size caps.
+
+The source log is never changed; only the mirrored copy is truncated. A small log is copied as is.
 
 ## Source locations
 
@@ -43,8 +56,9 @@ The idea for this script came from **Merlijn Van Waeyenberghe**, who suggested p
 | `PatchMyPCClient` | `%ProgramData%\PatchMyPC\Logs` | `*.log`, `*.lo_` | Yes |
 | `PatchMyPCRoot` | `%ProgramData%\PatchMyPC` | `*.log` | No |
 | `CCMLogs` | `%WinDir%\CCM\Logs` | `PatchMyPC*.log` | No |
+| `PatchMyPCInstallLogs` | `%ProgramData%\PatchMyPCInstallLogs` | `*.log` | Yes |
 
-If you changed the Patch My PC **Manage Installation Logging** folder, add it to the `$Sources` list (an example is included, commented out, in the script).
+`PatchMyPCInstallLogs` holds the installation logs (for example MSI logs) written by Patch My PC when **Manage Installation Logging** is enabled. If you changed that folder, update the `PatchMyPCInstallLogs` path in the `$Sources` list of both scripts, or add your folder as an extra entry (an example is included, commented out, in the scripts).
 
 ## Configuration
 
