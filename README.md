@@ -7,6 +7,10 @@ An Intune Remediation **remediation script** that mirrors Patch My PC client log
 
 The idea for this script came from **Merlijn Van Waeyenberghe**, who suggested placing the Patch My PC logs under the IME log location that is gathered by the Intune **Collect diagnostics** remote action.
 
+## How it works
+
+![Flow of the Patch My PC log sync: a scheduled Intune Remediation mirrors the logs to the IME Logs\PatchMyPC folder, and an on-demand Collect diagnostics action includes them in the diagnostics zip](pmpc-log-sync-flow.png)
+
 ## What it does
 
 - Copies new or changed logs to `C:\ProgramData\Microsoft\IntuneManagementExtension\Logs\PatchMyPC`, keeping the source folder structure under a subfolder per source.
