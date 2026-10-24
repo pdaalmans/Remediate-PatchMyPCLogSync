@@ -56,8 +56,9 @@ The source log is never changed; only the mirrored copy is truncated. A small lo
 | `PatchMyPCClient` | `%ProgramData%\PatchMyPC\Logs` | `*.log`, `*.lo_` | Yes |
 | `PatchMyPCRoot` | `%ProgramData%\PatchMyPC` | `*.log` | No |
 | `CCMLogs` | `%WinDir%\CCM\Logs` | `PatchMyPC*.log` | No |
+| `PatchMyPCInstallLogs` | `%ProgramData%\PatchMyPCInstallLogs` | `*.log` | Yes |
 
-If you changed the Patch My PC **Manage Installation Logging** folder, add it to the `$Sources` list (an example is included, commented out, in the script).
+`PatchMyPCInstallLogs` holds the installation logs (for example MSI logs) written by Patch My PC when **Manage Installation Logging** is enabled. If you changed that folder, update the `PatchMyPCInstallLogs` path in the `$Sources` list of both scripts, or add your folder as an extra entry (an example is included, commented out, in the scripts).
 
 ## Configuration
 

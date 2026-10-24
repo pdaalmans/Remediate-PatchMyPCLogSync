@@ -22,8 +22,9 @@ $Sources = @(
     [pscustomobject]@{ Name = 'PatchMyPCClient';     Path = (Join-Path $env:ProgramData 'PatchMyPC\Logs');      Include = @('*.log','*.lo_'); Recurse = $true  }
     [pscustomobject]@{ Name = 'PatchMyPCRoot';       Path = (Join-Path $env:ProgramData 'PatchMyPC');           Include = @('*.log');         Recurse = $false }
     [pscustomobject]@{ Name = 'CCMLogs';             Path = (Join-Path $env:WinDir 'CCM\Logs');                 Include = @('PatchMyPC*.log'); Recurse = $false }
-    # Add your custom "Manage Installation Logging" folder here if you changed it, e.g.:
-    # [pscustomobject]@{ Name = 'InstallLogs'; Path = 'C:\Windows\Logs\PatchMyPCInstallLogs'; Include = @('*.log'); Recurse = $true }
+    [pscustomobject]@{ Name = 'PatchMyPCInstallLogs'; Path = (Join-Path $env:ProgramData 'PatchMyPCInstallLogs'); Include = @('*.log');        Recurse = $true  }
+    # If you changed the "Manage Installation Logging" folder, update the PatchMyPCInstallLogs path above, or add it, e.g.:
+    # [pscustomobject]@{ Name = 'InstallLogs'; Path = 'D:\Logs\PatchMyPCInstallLogs'; Include = @('*.log'); Recurse = $true }
 )
 #endregion -------------------------------------------------------------------
 
