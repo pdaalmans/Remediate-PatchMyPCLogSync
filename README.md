@@ -1,7 +1,12 @@
 # Remediate-PatchMyPCLogSync
 Move in this case Patch My PC logs over to the IME folder which is gathered via Microsoft Intune
 
-An Intune Remediation **remediation script** that mirrors Patch My PC client logs into the Intune Management Extension (IME) `Logs` folder. Because that folder is included when you trigger the **Collect diagnostics** remote action in Intune, the Patch My PC logs end up in the diagnostics zip without any extra effort.
+An Intune Remediation (detection + remediation script pair) that mirrors Patch My PC client logs into the Intune Management Extension (IME) `Logs` folder. Because that folder is included when you trigger the **Collect diagnostics** remote action in Intune, the Patch My PC logs end up in the diagnostics zip without any extra effort.
+
+| Script | Role |
+|--------|------|
+| [Detect-PatchMyPCLogSync.ps1](Detect-PatchMyPCLogSync.ps1) | **Detection:** checks whether the mirrored copies are in sync with the source logs. Exit `1` triggers the remediation. |
+| [Remediate-PatchMyPCLogSync.ps1](Remediate-PatchMyPCLogSync.ps1) | **Remediation:** copies, truncates and cleans up the mirrored logs. |
 
 ## Credits
 
@@ -12,6 +17,15 @@ The idea for this script came from **Merlijn Van Waeyenberghe**, who suggested p
 ![Flow of the Patch My PC log sync: a scheduled Intune Remediation mirrors the logs to the IME Logs\PatchMyPC folder, and an on-demand Collect diagnostics action includes them in the diagnostics zip](pmpc-log-sync-flow.png)
 
 ## What it does
+
+**Detection** (`Detect-PatchMyPCLogSync.ps1`)
+
+- Builds the list of source logs that should be mirrored, using the same selection as the remediation (age, per-file size and total size cap).
+- Compares the last write time of each mirrored copy with its source. A missing copy or a different timestamp counts as out of sync.
+- Exits `0` when everything is in sync or when no Patch My PC logs are found, and `1` when files need mirroring. Because both scripts apply the same total size cap, files dropped by the cap never count as out of sync.
+- Makes no changes on the device.
+
+**Remediation** (`Remediate-PatchMyPCLogSync.ps1`)
 
 - Copies new or changed logs to `C:\ProgramData\Microsoft\IntuneManagementExtension\Logs\PatchMyPC`, keeping the source folder structure under a subfolder per source.
 - Opens source files with shared read access, so logs that are currently being written to can still be copied.
@@ -34,7 +48,7 @@ If you changed the Patch My PC **Manage Installation Logging** folder, add it to
 
 ## Configuration
 
-Settings are in the `CONFIG` block at the top of [Remediate-PatchMyPCLogSync.ps1](Remediate-PatchMyPCLogSync.ps1).
+Settings are in the `CONFIG` block at the top of [Remediate-PatchMyPCLogSync.ps1](Remediate-PatchMyPCLogSync.ps1) and [Detect-PatchMyPCLogSync.ps1](Detect-PatchMyPCLogSync.ps1). **Keep the `CONFIG` block identical in both scripts**, otherwise detection and remediation disagree about what is in sync. `$RetentionDays` exists only in the remediation script.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -49,15 +63,26 @@ Settings are in the `CONFIG` block at the top of [Remediate-PatchMyPCLogSync.ps1
 
 Create a script package under **Devices > Scripts and remediations** in the Intune admin center:
 
+- **Detection script:** `Detect-PatchMyPCLogSync.ps1`
 - **Remediation script:** `Remediate-PatchMyPCLogSync.ps1`
-- **Detection script:** a matching detection script that uses the same selection and the same `CONFIG` block. It is not included in this repository. Keep the `CONFIG` block identical in both scripts.
 - **Run this script using the logged-on credentials:** No (runs as SYSTEM)
 - **Run script in 64-bit PowerShell:** Yes
 - **Schedule:** for example daily
 
 ## Output and exit codes
 
-The script writes a one-line summary, for example:
+Both scripts write a one-line summary that shows up in the Intune remediation report.
+
+**Detection**
+
+| Exit code | Output example | Meaning |
+|-----------|----------------|---------|
+| `0` | `In sync: 12 log file(s) mirrored to C:\ProgramData\...\PatchMyPC.` | Compliant |
+| `0` | `No Patch My PC logs found on this device.` | Nothing to mirror, compliant |
+| `1` | `Out of sync: 3 of 12 log file(s) need mirroring.` | Remediation runs |
+| `1` | `Detection error: ...` | The script hit an error |
+
+**Remediation**
 
 ```
 Copied: 12 | Failed: 0 | Removed: 3 | Mirror: C:\ProgramData\Microsoft\IntuneManagementExtension\Logs\PatchMyPC
