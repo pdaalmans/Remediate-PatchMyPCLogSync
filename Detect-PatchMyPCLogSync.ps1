@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
     Intune Remediation - DETECTION
-    Checks whether Patch My PC client logs are mirrored into the IME Logs folder,
+    Checks whether Patch My PC client logs are mirrored into %windir%\CCM\Logs,
     so they are included in Intune "Collect diagnostics".
 
 .NOTES
@@ -12,16 +12,18 @@
 #>
 
 #region CONFIG ---------------------------------------------------------------
-$DestRoot   = Join-Path $env:ProgramData 'Microsoft\IntuneManagementExtension\Logs\PatchMyPC'
+# Collect diagnostics only gathers %windir%\CCM\Logs\*.log (no subfolders), so copies are stored flat
+# as <FilePrefix>-<Source Name>-<relative path>.log. Only files with this prefix are ever touched here.
+$DestRoot   = Join-Path $env:WinDir 'CCM\Logs'
+$FilePrefix = 'PMPCSync'
 $MaxAgeDays = 14     # only mirror source logs written in the last N days
 $MaxFileSizeMB  = 10   # per-file cap; larger logs keep only the last N MB
-$MaxTotalSizeMB = 75   # cap for the whole mirror folder (keeps the diagnostics zip lean)
+$MaxTotalSizeMB = 75   # cap for all mirrored copies together (keeps the diagnostics zip lean)
 
 $Sources = @(
     [pscustomobject]@{ Name = 'PatchMyPCIntuneLogs'; Path = (Join-Path $env:ProgramData 'PatchMyPCIntuneLogs'); Include = @('*.log','*.lo_'); Recurse = $true  }
     [pscustomobject]@{ Name = 'PatchMyPCClient';     Path = (Join-Path $env:ProgramData 'PatchMyPC\Logs');      Include = @('*.log','*.lo_'); Recurse = $true  }
     [pscustomobject]@{ Name = 'PatchMyPCRoot';       Path = (Join-Path $env:ProgramData 'PatchMyPC');           Include = @('*.log');         Recurse = $false }
-    [pscustomobject]@{ Name = 'CCMLogs';             Path = (Join-Path $env:WinDir 'CCM\Logs');                 Include = @('PatchMyPC*.log'); Recurse = $false }
     [pscustomobject]@{ Name = 'PatchMyPCInstallLogs'; Path = (Join-Path $env:ProgramData 'PatchMyPCInstallLogs'); Include = @('*.log');        Recurse = $true  }
     # If you changed the "Manage Installation Logging" folder, update the PatchMyPCInstallLogs path above, or add it, e.g.:
     # [pscustomobject]@{ Name = 'InstallLogs'; Path = 'D:\Logs\PatchMyPCInstallLogs'; Include = @('*.log'); Recurse = $true }
@@ -41,10 +43,14 @@ function Get-SourceFiles {
                 ($s.Include | Where-Object { $f.Name -like $_ })
             } |
             ForEach-Object {
-                $rel = $_.FullName.Substring($root.Length).TrimStart('\')
+                # Flatten the relative path into the file name; non-.log files (e.g. rotated .lo_) get
+                # a .log extension, because Collect diagnostics only gathers *.log
+                $rel  = $_.FullName.Substring($root.Length).TrimStart('\') -replace '\\', '_'
+                $name = "$FilePrefix-$($s.Name)-$rel"
+                if ($name -notlike '*.log') { $name += '.log' }
                 [pscustomobject]@{
                     Source = $_
-                    Target = Join-Path (Join-Path $DestRoot $s.Name) $rel
+                    Target = Join-Path $DestRoot $name
                 }
             }
     }

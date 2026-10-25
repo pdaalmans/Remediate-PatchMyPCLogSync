@@ -1,15 +1,18 @@
 <#
 .SYNOPSIS
     Intune Remediation - REMEDIATION
-    Mirrors Patch My PC client logs into the IME Logs folder so they are
+    Mirrors Patch My PC client logs into %windir%\CCM\Logs so they are
     included when "Collect diagnostics" is triggered from Intune.
  
 .DESCRIPTION
-    - Copies new/changed logs (opens source with shared read, so locked logs still copy)
+    - Copies new/changed logs flat into $DestRoot as <FilePrefix>-<Source>-<relative path>.log
+      (opens source with shared read, so locked logs still copy)
     - Large logs are truncated to the last $MaxFileSizeMB (tail), newest entries kept,
       starting at a full line and with a marker line at the top (marker included in the cap)
     - Removes mirrored copies older than $RetentionDays
-    - Enforces a total size cap on the mirror folder (copies no longer selected go first, then oldest)
+    - Enforces a total size cap on the mirrored copies (copies no longer selected go first, then oldest)
+    - Only files named <FilePrefix>-* are removed; other logs in $DestRoot are never touched
+    - Removes the old mirror folder ($LegacyDestRoot) used by earlier versions
  
 .NOTES
     Run as:            SYSTEM
@@ -18,16 +21,18 @@
 #>
  
 #region CONFIG ---------------------------------------------------------------
-$DestRoot   = Join-Path $env:ProgramData 'Microsoft\IntuneManagementExtension\Logs\PatchMyPC'
+# Collect diagnostics only gathers %windir%\CCM\Logs\*.log (no subfolders), so copies are stored flat
+# as <FilePrefix>-<Source Name>-<relative path>.log. Only files with this prefix are ever touched here.
+$DestRoot   = Join-Path $env:WinDir 'CCM\Logs'
+$FilePrefix = 'PMPCSync'
 $MaxAgeDays = 14     # only mirror source logs written in the last N days
 $MaxFileSizeMB  = 10   # per-file cap; larger logs keep only the last N MB
-$MaxTotalSizeMB = 75   # cap for the whole mirror folder (keeps the diagnostics zip lean)
+$MaxTotalSizeMB = 75   # cap for all mirrored copies together (keeps the diagnostics zip lean)
  
 $Sources = @(
     [pscustomobject]@{ Name = 'PatchMyPCIntuneLogs'; Path = (Join-Path $env:ProgramData 'PatchMyPCIntuneLogs'); Include = @('*.log','*.lo_'); Recurse = $true  }
     [pscustomobject]@{ Name = 'PatchMyPCClient';     Path = (Join-Path $env:ProgramData 'PatchMyPC\Logs');      Include = @('*.log','*.lo_'); Recurse = $true  }
     [pscustomobject]@{ Name = 'PatchMyPCRoot';       Path = (Join-Path $env:ProgramData 'PatchMyPC');           Include = @('*.log');         Recurse = $false }
-    [pscustomobject]@{ Name = 'CCMLogs';             Path = (Join-Path $env:WinDir 'CCM\Logs');                 Include = @('PatchMyPC*.log'); Recurse = $false }
     [pscustomobject]@{ Name = 'PatchMyPCInstallLogs'; Path = (Join-Path $env:ProgramData 'PatchMyPCInstallLogs'); Include = @('*.log');        Recurse = $true  }
     # If you changed the "Manage Installation Logging" folder, update the PatchMyPCInstallLogs path above, or add it, e.g.:
     # [pscustomobject]@{ Name = 'InstallLogs'; Path = 'D:\Logs\PatchMyPCInstallLogs'; Include = @('*.log'); Recurse = $true }
@@ -35,6 +40,7 @@ $Sources = @(
  
 # Remediation-only settings
 $RetentionDays  = 30   # remove mirrored copies older than this
+$LegacyDestRoot = Join-Path $env:ProgramData 'Microsoft\IntuneManagementExtension\Logs\PatchMyPC'  # old mirror, not collected (subfolder)
 #endregion -------------------------------------------------------------------
  
 function Get-SourceFiles {
@@ -50,10 +56,14 @@ function Get-SourceFiles {
                 ($s.Include | Where-Object { $f.Name -like $_ })
             } |
             ForEach-Object {
-                $rel = $_.FullName.Substring($root.Length).TrimStart('\')
+                # Flatten the relative path into the file name; non-.log files (e.g. rotated .lo_) get
+                # a .log extension, because Collect diagnostics only gathers *.log
+                $rel  = $_.FullName.Substring($root.Length).TrimStart('\') -replace '\\', '_'
+                $name = "$FilePrefix-$($s.Name)-$rel"
+                if ($name -notlike '*.log') { $name += '.log' }
                 [pscustomobject]@{
                     Source = $_
-                    Target = Join-Path (Join-Path $DestRoot $s.Name) $rel
+                    Target = Join-Path $DestRoot $name
                 }
             }
     }
@@ -163,9 +173,12 @@ try {
         catch { $failed++ }
     }
  
+    # Only our own copies; other logs in $DestRoot (e.g. ConfigMgr client logs) are never touched
+    $mirrorFilter = "$FilePrefix-*.log"
+ 
     # 2. Retention: remove old mirrored copies
     $cutoff = (Get-Date).AddDays(-$RetentionDays)
-    Get-ChildItem -LiteralPath $DestRoot -File -Recurse -ErrorAction SilentlyContinue |
+    Get-ChildItem -LiteralPath $DestRoot -File -Filter $mirrorFilter -ErrorAction SilentlyContinue |
         Where-Object { $_.LastWriteTime -lt $cutoff } |
         ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue; $removed++ }
  
@@ -173,7 +186,7 @@ try {
     #    so the files detection checks are never removed (that would loop remediation forever)
     $keep  = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
     foreach ($item in $selected) { [void]$keep.Add($item.Target) }
-    $all   = @(Get-ChildItem -LiteralPath $DestRoot -File -Recurse -ErrorAction SilentlyContinue |
+    $all   = @(Get-ChildItem -LiteralPath $DestRoot -File -Filter $mirrorFilter -ErrorAction SilentlyContinue |
                Sort-Object @{ Expression = { $keep.Contains($_.FullName) } }, LastWriteTime)
     $total = ($all | Measure-Object -Property Length -Sum).Sum
     $cap   = $MaxTotalSizeMB * 1MB
@@ -184,11 +197,10 @@ try {
         $removed++
     }
  
-    # 4. Clean up empty subfolders
-    Get-ChildItem -LiteralPath $DestRoot -Directory -Recurse -ErrorAction SilentlyContinue |
-        Sort-Object { $_.FullName.Length } -Descending |
-        Where-Object { -not (Get-ChildItem -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue) } |
-        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+    # 4. Remove the old mirror folder from earlier versions (subfolders are not collected)
+    if (Test-Path -LiteralPath $LegacyDestRoot -PathType Container) {
+        Remove-Item -LiteralPath $LegacyDestRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
  
     Write-Output "Copied: $copied | Failed: $failed | Removed: $removed | Mirror: $DestRoot"
     if ($failed -gt 0) { exit 1 } else { exit 0 }
