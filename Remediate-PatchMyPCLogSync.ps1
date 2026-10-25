@@ -9,9 +9,8 @@
       (opens source with shared read, so locked logs still copy)
     - Large logs are truncated to the last $MaxFileSizeMB (tail), newest entries kept,
       starting at a full line and with a marker line at the top (marker included in the cap)
-    - Removes mirrored copies older than $RetentionDays
-    - Enforces a total size cap on the mirrored copies (copies no longer selected go first, then oldest)
-    - Only files named <FilePrefix>-* are removed; other logs in $DestRoot are never touched
+    - Removes copies that are no longer selected (source rotated, deleted, older than $MaxAgeDays
+      or dropped by the $MaxTotalSizeMB cap); only <FilePrefix>-*.log files are ever removed
  
 .NOTES
     Run as:            SYSTEM
@@ -38,9 +37,6 @@ $Sources = @(
     # If you changed the "Manage Installation Logging" folder, update the Install path above, or add it, e.g.:
     # [pscustomobject]@{ Name = 'Install2'; Path = 'D:\Logs\PatchMyPCInstallLogs'; Include = @('*.log'); Recurse = $true }
 )
- 
-# Remediation-only settings
-$RetentionDays  = 30   # remove mirrored copies older than this
 #endregion -------------------------------------------------------------------
  
 # Short, readable, unique file name for a copy: <FilePrefix>-<Name>-<relative path>.log
@@ -78,7 +74,6 @@ function Get-SourceFiles {
             Where-Object {
                 $f = $_
                 $f.LastWriteTime -ge $cutoff -and
-                -not $f.FullName.StartsWith($DestRoot, [StringComparison]::OrdinalIgnoreCase) -and
                 ($s.Include | Where-Object { $f.Name -like $_ })
             } |
             ForEach-Object {
@@ -111,9 +106,6 @@ function Copy-LogFile {
         [Parameter(Mandatory)] [string]      $Target,
         [Parameter(Mandatory)] [long]        $MaxBytes
     )
-    $dir = Split-Path -Path $Target -Parent
-    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
- 
     # Shared read so logs that are currently being written to can still be copied
     $in = [IO.File]::Open($Source.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read,
                           [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
@@ -195,29 +187,13 @@ try {
         catch { $failed++ }
     }
  
-    # Only our own copies; other logs in $DestRoot (e.g. ConfigMgr client logs) are never touched
-    $mirrorFilter = "$FilePrefix-*.log"
- 
-    # 2. Retention: remove old mirrored copies
-    $cutoff = (Get-Date).AddDays(-$RetentionDays)
-    Get-ChildItem -LiteralPath $DestRoot -File -Filter $mirrorFilter -ErrorAction SilentlyContinue |
-        Where-Object { $_.LastWriteTime -lt $cutoff } |
-        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue; $removed++ }
- 
-    # 3. Total size cap: remove oldest first, starting with copies that are no longer selected,
-    #    so the files detection checks are never removed (that would loop remediation forever)
-    $keep  = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    # 2. Remove copies that are no longer selected (source rotated, deleted, older than $MaxAgeDays
+    #    or dropped by the size cap). Only our own copies; other logs in $DestRoot are never touched
+    $keep = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
     foreach ($item in $selected) { [void]$keep.Add($item.Target) }
-    $all   = @(Get-ChildItem -LiteralPath $DestRoot -File -Filter $mirrorFilter -ErrorAction SilentlyContinue |
-               Sort-Object @{ Expression = { $keep.Contains($_.FullName) } }, LastWriteTime)
-    $total = ($all | Measure-Object -Property Length -Sum).Sum
-    $cap   = $MaxTotalSizeMB * 1MB
-    foreach ($f in $all) {
-        if ($total -le $cap) { break }
-        $total -= $f.Length
-        Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue
-        $removed++
-    }
+    Get-ChildItem -LiteralPath $DestRoot -File -Filter "$FilePrefix-*.log" -ErrorAction SilentlyContinue |
+        Where-Object { -not $keep.Contains($_.FullName) } |
+        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue; $removed++ }
  
     Write-Output "Copied: $copied | Failed: $failed | Removed: $removed | Mirror: $DestRoot"
     if ($failed -gt 0) { exit 1 } else { exit 0 }

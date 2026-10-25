@@ -67,7 +67,6 @@ function Get-SourceFiles {
             Where-Object {
                 $f = $_
                 $f.LastWriteTime -ge $cutoff -and
-                -not $f.FullName.StartsWith($DestRoot, [StringComparison]::OrdinalIgnoreCase) -and
                 ($s.Include | Where-Object { $f.Name -like $_ })
             } |
             ForEach-Object {

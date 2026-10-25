@@ -36,7 +36,7 @@ Collect diagnostics gathers a fixed list of files and folders, including `%WinDi
 - Only mirrors logs written in the last `$MaxAgeDays` days.
 - Truncates large logs to the last `$MaxFileSizeMB` MB (the newest entries are kept). See [Truncation](#truncation).
 - Selects files newest-first so the mirror stays within `$MaxTotalSizeMB`, which keeps the diagnostics zip lean.
-- Removes mirrored copies older than `$RetentionDays` days and enforces the total size cap. Only files named `PMPC-*.log` are ever removed; the ConfigMgr client logs and other files in `C:\Windows\CCM\Logs` are never touched. When the cap is exceeded, copies that are no longer selected (for example rotated or deleted source logs) are removed first, oldest first. Selected copies are only removed as a last resort, so the remediation does not remove files that the detection then reports as missing.
+- Removes copies that are no longer selected: the source log was rotated or deleted, is older than `$MaxAgeDays` days, or was dropped by the `$MaxTotalSizeMB` cap. Only files named `PMPC-*.log` are ever removed; the ConfigMgr client logs and other files in `C:\Windows\CCM\Logs` are never touched.
 - Sets the last write time of each copy to that of the source, so a detection script can reliably compare the two.
 
 ## File naming
@@ -93,7 +93,7 @@ The `PatchMyPC*.log` files that the ConfigMgr client writes to `C:\Windows\CCM\L
 
 ## Configuration
 
-Settings are in the `CONFIG` block at the top of [Remediate-PatchMyPCLogSync.ps1](Remediate-PatchMyPCLogSync.ps1) and [Detect-PatchMyPCLogSync.ps1](Detect-PatchMyPCLogSync.ps1). **Keep the `CONFIG` block identical in both scripts**, otherwise detection and remediation disagree about what is in sync. `$RetentionDays` exists only in the remediation script.
+Settings are in the `CONFIG` block at the top of [Remediate-PatchMyPCLogSync.ps1](Remediate-PatchMyPCLogSync.ps1) and [Detect-PatchMyPCLogSync.ps1](Detect-PatchMyPCLogSync.ps1). **Keep the `CONFIG` block identical in both scripts**, otherwise detection and remediation disagree about what is in sync.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -104,7 +104,6 @@ Settings are in the `CONFIG` block at the top of [Remediate-PatchMyPCLogSync.ps1
 | `$MaxFileSizeMB` | `10` | Per-file cap; larger logs keep only the last N MB |
 | `$MaxTotalSizeMB` | `75` | Size cap for all mirrored copies together |
 | `$Sources` | see above | Folders, include patterns and recursion to mirror |
-| `$RetentionDays` | `30` | Remove mirrored copies older than N days (remediation only) |
 
 ## Deployment
 
