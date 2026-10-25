@@ -15,23 +15,51 @@
 # Collect diagnostics only gathers %windir%\CCM\Logs\*.log (no subfolders), so copies are stored flat
 # as <FilePrefix>-<Source Name>-<relative path>.log. Only files with this prefix are ever touched here.
 $DestRoot   = Join-Path $env:WinDir 'CCM\Logs'
-$FilePrefix = 'PMPCSync'
+$FilePrefix = 'PMPC'
+$MaxNameLength = 80  # longer names are shortened and get a hash, so they stay unique
 $MaxAgeDays = 14     # only mirror source logs written in the last N days
 $MaxFileSizeMB  = 10   # per-file cap; larger logs keep only the last N MB
 $MaxTotalSizeMB = 75   # cap for all mirrored copies together (keeps the diagnostics zip lean)
 
 $Sources = @(
-    [pscustomobject]@{ Name = 'PatchMyPCIntuneLogs'; Path = (Join-Path $env:ProgramData 'PatchMyPCIntuneLogs'); Include = @('*.log','*.lo_'); Recurse = $true  }
-    [pscustomobject]@{ Name = 'PatchMyPCClient';     Path = (Join-Path $env:ProgramData 'PatchMyPC\Logs');      Include = @('*.log','*.lo_'); Recurse = $true  }
-    [pscustomobject]@{ Name = 'PatchMyPCRoot';       Path = (Join-Path $env:ProgramData 'PatchMyPC');           Include = @('*.log');         Recurse = $false }
-    [pscustomobject]@{ Name = 'PatchMyPCInstallLogs'; Path = (Join-Path $env:ProgramData 'PatchMyPCInstallLogs'); Include = @('*.log');        Recurse = $true  }
-    # If you changed the "Manage Installation Logging" folder, update the PatchMyPCInstallLogs path above, or add it, e.g.:
-    # [pscustomobject]@{ Name = 'InstallLogs'; Path = 'D:\Logs\PatchMyPCInstallLogs'; Include = @('*.log'); Recurse = $true }
+    # Name is the short tag in the copy's file name, so keep it short and unique
+    [pscustomobject]@{ Name = 'Intune';  Path = (Join-Path $env:ProgramData 'PatchMyPCIntuneLogs');  Include = @('*.log','*.lo_'); Recurse = $true  }
+    [pscustomobject]@{ Name = 'Client';  Path = (Join-Path $env:ProgramData 'PatchMyPC\Logs');       Include = @('*.log','*.lo_'); Recurse = $true  }
+    [pscustomobject]@{ Name = 'Root';    Path = (Join-Path $env:ProgramData 'PatchMyPC');            Include = @('*.log');         Recurse = $false }
+    [pscustomobject]@{ Name = 'Install'; Path = (Join-Path $env:ProgramData 'PatchMyPCInstallLogs'); Include = @('*.log');         Recurse = $true  }
+    # If you changed the "Manage Installation Logging" folder, update the Install path above, or add it, e.g.:
+    # [pscustomobject]@{ Name = 'Install2'; Path = 'D:\Logs\PatchMyPCInstallLogs'; Include = @('*.log'); Recurse = $true }
 )
 #endregion -------------------------------------------------------------------
 
+# Short, readable, unique file name for a copy: <FilePrefix>-<Name>-<relative path>.log
+#  - subfolders become '_', and a leading 'PatchMyPC-' is dropped (the prefix already says so)
+#  - non-.log files (e.g. rotated .lo_) get .log appended, because Collect diagnostics only gathers *.log
+#  - names over $MaxNameLength are shortened and end in a hash of the source path
+function Get-TargetName {
+    param([string] $Tag, [string] $RelativePath, $Used)
+    $flat  = $RelativePath -replace '\\', '_'
+    $sha   = [Security.Cryptography.SHA256]::Create()
+    $bytes = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes("$Tag\$RelativePath".ToLowerInvariant()))
+    $hash  = -join ($bytes[0..2] | ForEach-Object { $_.ToString('x2') })
+    # Fall back to the full name, then to a hashed name, if a shorter name is already taken
+    foreach ($candidate in @(($flat -replace '^PatchMyPC[-_]', ''), $flat, $null)) {
+        $hashed = -not $candidate
+        if ($hashed) { $candidate = $flat }
+        $name = "$FilePrefix-$Tag-$candidate"
+        if ($name -notlike '*.log') { $name += '.log' }
+        if ($hashed -or $name.Length -gt $MaxNameLength) {
+            $base = $name -replace '\.log$', ''
+            $name = $base.Substring(0, [math]::Min($base.Length, $MaxNameLength - 11)) + "~$hash.log"
+        }
+        if ($Used.Add($name)) { return $name }
+    }
+    return $name
+}
+ 
 function Get-SourceFiles {
     $cutoff = (Get-Date).AddDays(-$MaxAgeDays)
+    $used   = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
     foreach ($s in $Sources) {
         if (-not (Test-Path -LiteralPath $s.Path -PathType Container)) { continue }
         $root = $s.Path.TrimEnd('\')
@@ -43,14 +71,10 @@ function Get-SourceFiles {
                 ($s.Include | Where-Object { $f.Name -like $_ })
             } |
             ForEach-Object {
-                # Flatten the relative path into the file name; non-.log files (e.g. rotated .lo_) get
-                # a .log extension, because Collect diagnostics only gathers *.log
-                $rel  = $_.FullName.Substring($root.Length).TrimStart('\') -replace '\\', '_'
-                $name = "$FilePrefix-$($s.Name)-$rel"
-                if ($name -notlike '*.log') { $name += '.log' }
+                $rel = $_.FullName.Substring($root.Length).TrimStart('\')
                 [pscustomobject]@{
                     Source = $_
-                    Target = Join-Path $DestRoot $name
+                    Target = Join-Path $DestRoot (Get-TargetName -Tag $s.Name -RelativePath $rel -Used $used)
                 }
             }
     }
