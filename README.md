@@ -10,18 +10,11 @@ An Intune Remediation (detection + remediation script pair) that mirrors Patch M
 
 ## Credits
 
-The idea for this script came from **Merlijn Van Waeyenberghe**, who suggested placing the Patch My PC logs under the IME log location that is gathered by the Intune **Collect diagnostics** remote action.
+The idea for this script came from **Merlijn Van Waeyenberghe**, who suggested placing the Patch My PC logs in a log location that is gathered by the Intune **Collect diagnostics** remote action.
 
 ## Why C:\Windows\CCM\Logs
 
-Collect diagnostics gathers a fixed list of files and folders. For the two log folders that matter here it uses wildcards that only match files **directly in** the folder, not in subfolders:
-
-| Collected | What it means |
-|-----------|---------------|
-| `%ProgramData%\Microsoft\IntuneManagementExtension\Logs\*.*` | Files in the IME `Logs` folder; subfolders such as `Logs\PatchMyPC` are **not** collected |
-| `%WinDir%\CCM\Logs\*.log` | `.log` files in the CCM `Logs` folder; no subfolders and no other extensions |
-
-Earlier versions of these scripts mirrored the logs to `IME\Logs\PatchMyPC\<source>\...`, which is why they never showed up in the diagnostics zip. The scripts now copy every log **flat** into `C:\Windows\CCM\Logs`, with a prefix that tells you which folder it came from (see [File naming](#file-naming)). The remediation removes the old `IME\Logs\PatchMyPC` folder.
+Collect diagnostics gathers a fixed list of files and folders, including `%WinDir%\CCM\Logs\*.log`. That wildcard only matches `.log` files **directly in** the folder: no subfolders and no other extensions. The scripts therefore copy every log **flat** into `C:\Windows\CCM\Logs`, with a prefix that tells you which folder it came from (see [File naming](#file-naming)).
 
 ## How it works
 
@@ -45,7 +38,6 @@ Earlier versions of these scripts mirrored the logs to `IME\Logs\PatchMyPC\<sour
 - Selects files newest-first so the mirror stays within `$MaxTotalSizeMB`, which keeps the diagnostics zip lean.
 - Removes mirrored copies older than `$RetentionDays` days and enforces the total size cap. Only files named `PMPC-*.log` are ever removed; the ConfigMgr client logs and other files in `C:\Windows\CCM\Logs` are never touched. When the cap is exceeded, copies that are no longer selected (for example rotated or deleted source logs) are removed first, oldest first. Selected copies are only removed as a last resort, so the remediation does not remove files that the detection then reports as missing.
 - Sets the last write time of each copy to that of the source, so a detection script can reliably compare the two.
-- Removes copies made by earlier versions: the old mirror folder `C:\ProgramData\Microsoft\IntuneManagementExtension\Logs\PatchMyPC` and `PMPCSync-*.log` files in `C:\Windows\CCM\Logs`.
 
 ## File naming
 
@@ -101,7 +93,7 @@ The `PatchMyPC*.log` files that the ConfigMgr client writes to `C:\Windows\CCM\L
 
 ## Configuration
 
-Settings are in the `CONFIG` block at the top of [Remediate-PatchMyPCLogSync.ps1](Remediate-PatchMyPCLogSync.ps1) and [Detect-PatchMyPCLogSync.ps1](Detect-PatchMyPCLogSync.ps1). **Keep the `CONFIG` block identical in both scripts**, otherwise detection and remediation disagree about what is in sync. `$RetentionDays`, `$LegacyPrefix` and `$LegacyDestRoot` exist only in the remediation script.
+Settings are in the `CONFIG` block at the top of [Remediate-PatchMyPCLogSync.ps1](Remediate-PatchMyPCLogSync.ps1) and [Detect-PatchMyPCLogSync.ps1](Detect-PatchMyPCLogSync.ps1). **Keep the `CONFIG` block identical in both scripts**, otherwise detection and remediation disagree about what is in sync. `$RetentionDays` exists only in the remediation script.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -113,8 +105,6 @@ Settings are in the `CONFIG` block at the top of [Remediate-PatchMyPCLogSync.ps1
 | `$MaxTotalSizeMB` | `75` | Size cap for all mirrored copies together |
 | `$Sources` | see above | Folders, include patterns and recursion to mirror |
 | `$RetentionDays` | `30` | Remove mirrored copies older than N days (remediation only) |
-| `$LegacyPrefix` | `PMPCSync` | File prefix of earlier versions; those copies are removed by the remediation (remediation only) |
-| `$LegacyDestRoot` | `%ProgramData%\Microsoft\IntuneManagementExtension\Logs\PatchMyPC` | Old mirror folder from earlier versions, removed by the remediation (remediation only) |
 
 ## Deployment
 

@@ -12,7 +12,6 @@
     - Removes mirrored copies older than $RetentionDays
     - Enforces a total size cap on the mirrored copies (copies no longer selected go first, then oldest)
     - Only files named <FilePrefix>-* are removed; other logs in $DestRoot are never touched
-    - Removes copies made by earlier versions ($LegacyDestRoot and $LegacyPrefix-*.log)
  
 .NOTES
     Run as:            SYSTEM
@@ -42,8 +41,6 @@ $Sources = @(
  
 # Remediation-only settings
 $RetentionDays  = 30   # remove mirrored copies older than this
-$LegacyPrefix   = 'PMPCSync'  # file prefix of earlier versions; those copies are removed
-$LegacyDestRoot = Join-Path $env:ProgramData 'Microsoft\IntuneManagementExtension\Logs\PatchMyPC'  # old mirror, not collected (subfolder)
 #endregion -------------------------------------------------------------------
  
 # Short, readable, unique file name for a copy: <FilePrefix>-<Name>-<relative path>.log
@@ -221,14 +218,6 @@ try {
         Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue
         $removed++
     }
- 
-    # 4. Remove copies made by earlier versions: the old mirror folder (subfolders are not collected)
-    #    and copies with the old file prefix
-    if (Test-Path -LiteralPath $LegacyDestRoot -PathType Container) {
-        Remove-Item -LiteralPath $LegacyDestRoot -Recurse -Force -ErrorAction SilentlyContinue
-    }
-    Get-ChildItem -LiteralPath $DestRoot -File -Filter "$LegacyPrefix-*.log" -ErrorAction SilentlyContinue |
-        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue; $removed++ }
  
     Write-Output "Copied: $copied | Failed: $failed | Removed: $removed | Mirror: $DestRoot"
     if ($failed -gt 0) { exit 1 } else { exit 0 }
