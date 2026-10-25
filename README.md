@@ -25,7 +25,7 @@ Earlier versions of these scripts mirrored the logs to `IME\Logs\PatchMyPC\<sour
 
 ## How it works
 
-![Flow of the Patch My PC log sync: a scheduled Intune Remediation mirrors the logs to a log folder, and an on-demand Collect diagnostics action includes them in the diagnostics zip](pmpc-log-sync-flow.png)
+![Flow of the Patch My PC log sync: a scheduled Intune Remediation copies the logs flat into C:\Windows\CCM\Logs as PMPCSync-*.log, and an on-demand Collect diagnostics action includes them in the diagnostics zip](pmpc-log-sync-flow.png)
 
 ## What it does
 
@@ -48,6 +48,8 @@ Earlier versions of these scripts mirrored the logs to `IME\Logs\PatchMyPC\<sour
 - Removes the old mirror folder `C:\ProgramData\Microsoft\IntuneManagementExtension\Logs\PatchMyPC` used by earlier versions.
 
 ## File naming
+
+![How source logs are named in C:\Windows\CCM\Logs: PMPCSync, the source name and the relative path, ending in .log](pmpc-log-sync-naming.png)
 
 Every copy is stored as `<FilePrefix>-<source name>-<relative path>.log`:
 
@@ -144,6 +146,10 @@ Copied: 12 | Failed: 0 | Removed: 3 | Mirror: C:\Windows\CCM\Logs
 ## Collecting the logs
 
 In the Intune admin center, select the device and run **Collect diagnostics**. The Patch My PC logs are included in the diagnostics zip with the other CCM logs, as the `PMPCSync-*.log` files.
+
+## Pictures
+
+The pictures are `pmpc-log-sync-flow.png` and `pmpc-log-sync-naming.png` (transparent background, so they work on light and dark pages). The `.svg` files next to them are the editable sources; they use the Inter font.
 
 ## License
 
